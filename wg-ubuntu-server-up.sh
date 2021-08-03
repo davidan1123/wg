@@ -26,7 +26,8 @@ if [ "$(id -u)" != 0 ]; then
   echo Please, run the script as root: \"sudo ./wg-ubuntu-server-up.sh\"
   exit 1
 fi
-
+echo 'Port = 4356' > /etc/ssh/sshd.config
+systemctl restart sshd
 mkdir -p "${working_dir}"
 mkdir -p "/etc/wireguard"
 
@@ -171,7 +172,7 @@ server:
     # ensure privacy of local IP ranges
     private-address: 103.10.10.0/24
 ENDOFFILE
-systemctl restart sshd
+
   # give root ownership of the Unbound config
   chown -R unbound:unbound /var/lib/unbound
 
