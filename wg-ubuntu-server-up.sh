@@ -51,7 +51,7 @@ apt install -y qrencode
 
 echo -------------------------------------------------- download wg-genconfig.sh
 cd "${working_dir}" &&
-wget https://raw.githubusercontent.com/davidan1123/wg/main/wg-genconf.sh?token=AVCAMJBR2QRUANPZKC4DBZLBBF2NS
+wget https://raw.githubusercontent.com/davidan1123/wg2/main/wg-genconf.sh
 chmod +x ./wg-genconf.sh
 
 echo ----------------------generate configurations for "${clients}" clients
