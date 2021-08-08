@@ -9,7 +9,7 @@ set -x # enable print all commands
 clients_count=${1:-10}
 
 # dns ip
-dns_ip=${2:-103.10.10.1}
+dns_ip=${2:-104.10.10.1}
 
 # server ip
 server_ip=${3}
@@ -41,7 +41,7 @@ echo -e "\t$(pwd)/${server_config}"
 #
 cat > "${server_config}" <<EOL
 [Interface]
-Address = 103.10.10.1/24
+Address = 104.10.10.1/24
 SaveConfig = true
 ListenPort = 52220
 PrivateKey = ${server_private_key}
@@ -59,7 +59,7 @@ for i in $(seq 1 "${clients_count}");
 do
     client_private_key=$(wg genkey)
     client_public_key=$(echo "${client_private_key}" | wg pubkey)
-    client_ip=103.10.10.$((i+1))/32
+    client_ip=104.10.10.$((i+1))/32
     client_config=client$i.conf
     echo -e "\t$(pwd)/${client_config}"
   	cat > "${client_config}" <<EOL
