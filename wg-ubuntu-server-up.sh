@@ -82,7 +82,7 @@ echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-sysctl.conf
 echo ---------------------------------------------------configure firewall rules
 
 
-iptables -A INPUT -s 105.10.10.0/24 -p tcp -m tcp --dport 4356 -j ACCEPT
+iptables -A INPUT -s 106.10.10.0/24 -p tcp -m tcp --dport 4356 -j ACCEPT
 iptables -A INPUT -i eth0 -p udp -m udp --dport 52220 -j ACCEPT
 iptables -A INPUT -i wg0 -j ACCEPT
 iptables -A INPUT -i lo -j ACCEPT
@@ -99,12 +99,12 @@ iptables -A FORWARD -i wg0 -j ACCEPT
 iptables -A FORWARD -o wg0 -j ACCEPT
 iptables -A OUTPUT -p udp -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 iptables -A OUTPUT -p tcp -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-iptables -A OUTPUT -s 105.10.10.0/24 -j ACCEPT
+iptables -A OUTPUT -s 106.10.10.0/24 -j ACCEPT
 iptables -A OUTPUT -p tcp -m tcp --dport 80 -m comment --comment "HTTP Port" -j ACCEPT
 iptables -A OUTPUT -p tcp -m tcp --dport 4356 -m comment --comment "SSH Port" -j ACCEPT
 iptables -A OUTPUT -p icmp -j ACCEPT
 iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-iptables -t nat -A POSTROUTING -s 105.10.10.0/24 -o eth0 -j MASQUERADE
+iptables -t nat -A POSTROUTING -s 106.10.10.0/24 -o eth0 -j MASQUERADE
 
 
 # make firewall changes persistent
@@ -141,9 +141,9 @@ server:
     # IPs authorised to access the DNS Server
     access-control: 0.0.0.0/0                 refuse
     access-control: 127.0.0.1                 allow
-    access-control: 105.10.10.0/24             allow
+    access-control: 106.10.10.0/24             allow
     # not allowed to be returned for public Internet  names
-    private-address: 105.10.10.0/24
+    private-address: 106.10.10.0/24
     #hide DNS Server info
     hide-identity: yes
     hide-version: yes
@@ -170,7 +170,7 @@ server:
     # ensure kernel buffer is large enough to not lose messages in traffic spikes
     so-rcvbuf: 1m
     # ensure privacy of local IP ranges
-    private-address: 105.10.10.0/24
+    private-address: 106.10.10.0/24
 ENDOFFILE
 
   # give root ownership of the Unbound config
@@ -196,7 +196,7 @@ qrencode -t ansiutf8 < ~/wireguard/client2.conf
 echo "--------------------------------------------------------↑"
 echo && echo You can use this config: client2.conf
 echo "--------------------------------------------------------↓"
-cat "${working_dir}/client1.conf"
+cat "${working_dir}/client2.conf"
 echo "--------------------------------------------------------↑"
 
 echo && echo "Or you could find all the generated configs here: ${working_dir}"
