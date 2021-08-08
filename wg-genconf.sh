@@ -9,7 +9,7 @@ set -x # enable print all commands
 clients_count=${1:-10}
 
 # dns ip
-dns_ip=${2:-104.10.10.1}
+dns_ip=${2:-105.10.10.1}
 
 # server ip
 server_ip=${3}
@@ -41,7 +41,7 @@ echo -e "\t$(pwd)/${server_config}"
 #
 cat > "${server_config}" <<EOL
 [Interface]
-Address = 104.10.10.1/24
+Address = 105.10.10.1/24
 SaveConfig = true
 ListenPort = 52220
 PrivateKey = ${server_private_key}
