@@ -82,27 +82,27 @@ echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-sysctl.conf
 echo ---------------------------------------------------configure firewall rules
 
 
-iptables -A INPUT -s 106.10.10.0/24 -p tcp -m tcp --dport 4356 -j ACCEPT
-iptables -A INPUT -i eth0 -p udp -m udp --dport 52220 -j ACCEPT
-iptables -A INPUT -i wg0 -j ACCEPT
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A INPUT -p udp -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-iptables -A INPUT -p tcp -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-iptables -A INPUT -p tcp -m conntrack --ctstate INVALID -j DROP
-iptables -A INPUT -p tcp -m tcp --dport 80 -m comment --comment "HTTP Port" -j ACCEPT
+iptables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
 iptables -A INPUT -p icmp -j ACCEPT
-iptables -A INPUT -p tcp -m tcp --dport 4356 -j LOG --log-prefix "SSH: "
-iptables -A INPUT -p tcp -m tcp --dport 4356 -j DROP
-iptables -A FORWARD -i eth0 -o wg0 -j ACCEPT
-iptables -A FORWARD -i wg0 -o eth0 -j ACCEPT
-iptables -A FORWARD -i wg0 -j ACCEPT
-iptables -A FORWARD -o wg0 -j ACCEPT
-iptables -A OUTPUT -p udp -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-iptables -A OUTPUT -p tcp -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-iptables -A OUTPUT -s 106.10.10.0/24 -j ACCEPT
-iptables -A OUTPUT -p tcp -m tcp --dport 80 -m comment --comment "HTTP Port" -j ACCEPT
-iptables -A OUTPUT -p tcp -m tcp --dport 4356 -m comment --comment "SSH Port" -j ACCEPT
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A INPUT -p tcp --dport 22222 -j ACCEPT
+iptables -A INPUT -i wg0 -p udp -m udp --dport 52220 -j ACCEPT
+iptables -A INPUT -p tcp --dport 80 -m comment --comment "HTTP Port" -j ACCEPT
+iptables -A INPUT -j LOG --log-prefix "iptables input dropped: "
+iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+iptables -A FORWARD -m conntrack --ctstate INVALID -j DROP
+iptables -A FORWARD -p icmp -j ACCEPT
+iptables -A FORWARD -i lo -j ACCEPT
+iptables -A FORWARD -j LOG --log-prefix "iptables forward dropped: "
+iptables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+iptables -A OUTPUT -m conntrack --ctstate INVALID -j DROP
 iptables -A OUTPUT -p icmp -j ACCEPT
+iptables -A OUTPUT -o lo -j ACCEPT
+iptables -A OUTPUT -s 106.10.10.0/24 -j ACCEPT
+iptables -A OUTPUT -o eth0 -p tcp -m multiport --dports 53,80,443 -m conntrack --ctstate NEW -j ACCEPT
+iptables -A OUTPUT -o eth0 -p udp -m multiport --dports 53,123 -j ACCEPT
+iptables -A OUTPUT -j LOG --log-prefix "iptables output dropped: "
 iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 iptables -t nat -A POSTROUTING -s 106.10.10.0/24 -o eth0 -j MASQUERADE
 
