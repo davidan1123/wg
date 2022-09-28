@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# usage:
-#     wg-ubuntu-server-up.sh [--clients=<clients_count>] [--no-reboot] [--no-unbound]
-#
-
 set -e # exit when any command fails
 set -x # enable print all commands
 
@@ -26,7 +22,7 @@ if [ "$(id -u)" != 0 ]; then
   echo Please, run the script as root: \"sudo ./wg-ubuntu-server-up.sh\"
   exit 1
 fi
-echo 'Port 4356' >> /etc/ssh/sshd_config
+echo 'Port 22222' >> /etc/ssh/sshd_config
 systemctl restart sshd
 mkdir -p "${working_dir}"
 mkdir -p "/etc/wireguard"
