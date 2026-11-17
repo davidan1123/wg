@@ -193,11 +193,21 @@ fi
 ufw reload
 
 # --- 7. Restart SSH ---------------------------------------------------------
-# Ubuntu 22.10+ uses socket activation, which ignores Port in sshd_config.
-# Disable the socket and run sshd as a normal service so the port applies.
+# Run sshd as a normal service instead of Ubuntu 22.10+ socket activation.
+systemctl daemon-reload
 systemctl disable --now ssh.socket 2> /dev/null || true
+systemctl stop ssh 2> /dev/null || true
+# ssh.service uses KillMode=process, so an old listener can survive the stop,
+# keep the port busy and fail every login. Logged-in sessions are not touched.
+pkill -f '^sshd: /usr/sbin/sshd.*\[listener\]' 2> /dev/null || true
+sleep 1
 systemctl enable ssh
-systemctl restart ssh
+systemctl start ssh
+
+if ! ss -tln | grep -q ":$SSH_PORT\b"; then
+  echo "WARNING: nothing is listening on port $SSH_PORT. Do NOT close this session." >&2
+  echo "Check: systemctl status ssh; journalctl -u ssh -n 30" >&2
+fi
 
 echo
 ufw status verbose

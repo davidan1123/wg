@@ -162,8 +162,14 @@ if [[ "$ssh_port" != "$current_ssh_port" ]]; then
   if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then ufw allow "$ssh_port/tcp"; fi
   sshd -t
   systemctl daemon-reload
-  # Ubuntu 22.10+ uses socket activation; older releases use ssh.service
-  if systemctl is-active --quiet ssh.socket; then systemctl restart ssh.socket; else systemctl restart ssh; fi
+  # Ubuntu 22.10+ may use socket activation (the port comes from sshd_config
+  # on daemon-reload). Stop both, then remove any leftover listener: with
+  # KillMode=process it can survive the stop, hold the port and fail every login.
+  systemctl stop ssh.socket ssh 2>/dev/null || true
+  pkill -f '^sshd: /usr/sbin/sshd.*\[listener\]' 2>/dev/null || true
+  sleep 1
+  if systemctl is-enabled --quiet ssh.socket 2>/dev/null; then systemctl start ssh.socket; else systemctl start ssh; fi
+  ss -tln | grep -q ":$ssh_port\b" || echo "WARNING: nothing listens on port $ssh_port yet. Do NOT close this session."
   echo "Keep this session open and test: ssh -p $ssh_port <user>@$endpoint"
 fi
 
