@@ -4,6 +4,9 @@
 # Usage:
 #   sudo ./wg-ubuntu-server-up.sh       asks a few questions, then installs
 #   sudo ./wg-ubuntu-server-up.sh -y    uses all defaults, asks nothing
+#
+# It first offers to run server-harden.sh (sudo user, SSH keys only,
+# custom SSH port, UFW). That part always asks questions, so -y skips it.
 set -euo pipefail
 
 ASSUME_YES=
@@ -16,6 +19,17 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)
 # ------------------------------------------------------------------ helpers
 die()  { echo "Error: $*" >&2; exit 1; }
 step() { echo; echo "==> $*"; }
+
+# sibling_script NAME -> path to NAME next to this script, downloaded if missing
+sibling_script() {
+  local path="$script_dir/$1"
+  if [[ ! -f "$path" ]]; then
+    path="$working_dir/$1"
+    mkdir -p "$working_dir"
+    curl -fsSL "$repo_raw/$1" -o "$path"
+  fi
+  echo "$path"
+}
 
 # ask VAR "question" default
 ask() {
@@ -42,6 +56,14 @@ if [[ -e /etc/wireguard/wg0.conf ]]; then
     die "cancelled, nothing changed"
 fi
 
+hardened=
+if yes_no "Harden the server first (sudo user, SSH keys only, custom SSH port, UFW)?" n; then
+  step "Server hardening (the WireGuard port is opened later, no need to list it)"
+  bash "$(sibling_script server-harden.sh)"
+  hardened=1
+  echo
+fi
+
 detected_ip=$(curl -4 -s --max-time 3 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
 current_ssh_port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')
 current_ssh_port=${current_ssh_port:-22}
@@ -58,7 +80,11 @@ if yes_no "Run a private DNS resolver (Unbound) on this server?" y; then
 else
   unbound=;  ask dns "DNS server for clients" 1.1.1.1
 fi
-ask ssh_port "SSH port (change only if you want a new one)" "$current_ssh_port"
+if [[ $hardened ]]; then
+  ssh_port=$current_ssh_port   # already chosen during hardening
+else
+  ask ssh_port "SSH port (change only if you want a new one)" "$current_ssh_port"
+fi
 yes_no "Reboot when finished?" n && reboot_after=1 || reboot_after=
 
 valid_port() { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 )); }
@@ -89,12 +115,7 @@ apt-get update -y
 apt-get install -y wireguard qrencode curl ${unbound:+unbound}
 
 step "Generating configs"
-genconf="$script_dir/wg-genconf.sh"
-if [[ ! -f "$genconf" ]]; then
-  genconf="$working_dir/wg-genconf.sh"
-  mkdir -p "$working_dir"
-  curl -fsSL "$repo_raw/wg-genconf.sh" -o "$genconf"
-fi
+genconf=$(sibling_script wg-genconf.sh)
 ASSUME_YES=1 WG_SKIP_QR=1 \
 WG_CLIENTS="$clients" WG_ENDPOINT="$endpoint" WG_PORT="$wg_port" \
 WG_SUBNET="$subnet" WG_DNS="$dns" WG_OUT_DIR="$working_dir" \
