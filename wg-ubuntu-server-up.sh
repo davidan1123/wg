@@ -1,208 +1,180 @@
 #!/usr/bin/env bash
-set -e # exit when any command fails
-set -x # enable print all commands
+# One-shot WireGuard VPN server setup for Ubuntu.
+#
+# Usage:
+#   sudo ./wg-ubuntu-server-up.sh       asks a few questions, then installs
+#   sudo ./wg-ubuntu-server-up.sh -y    uses all defaults, asks nothing
+set -euo pipefail
 
-# constants:
+ASSUME_YES=
+[[ "${1:-}" == "-y" || "${1:-}" == "--yes" ]] && ASSUME_YES=1
+
 working_dir="$HOME/wireguard"
+repo_raw="https://raw.githubusercontent.com/davidan1123/wg/main"
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)
 
-# inputs:
-clients=8
-reboot_enabled=true
-unbound_enabled=true
+# ------------------------------------------------------------------ helpers
+die()  { echo "Error: $*" >&2; exit 1; }
+step() { echo; echo "==> $*"; }
 
-for arg in "$@"
-do
-  [[ "${arg}" == "--no-reboot" ]] && reboot_enabled=
-  [[ "${arg}" == "--no-unbound" ]] && unbound_enabled=
-  [[ "${arg}" == "--clients="* ]] && clients=${arg#*=}
-done
+# ask VAR "question" default
+ask() {
+  local var=$1 question=$2 default=$3 answer=
+  if [[ -z "$ASSUME_YES" ]]; then read -rp "$question [$default]: " answer; fi
+  printf -v "$var" '%s' "${answer:-$default}"
+}
 
-# check a user is root
-if [ "$(id -u)" != 0 ]; then
-  echo Please, run the script as root: \"sudo ./wg-ubuntu-server-up.sh\"
-  exit 1
+# yes_no "question" y|n  -> exit status 0 for yes
+yes_no() {
+  local question=$1 default=$2 answer=
+  local hint="[y/N]"; [[ $default == y ]] && hint="[Y/n]"
+  if [[ -z "$ASSUME_YES" ]]; then read -rp "$question $hint: " answer; fi
+  [[ "${answer:-$default}" =~ ^[Yy] ]]
+}
+
+# ------------------------------------------------------------------- checks
+[[ $(id -u) == 0 ]] || die "run as root: sudo $0"
+command -v apt-get >/dev/null || die "this script is for Ubuntu/Debian"
+[[ -z "$ASSUME_YES" && ! -t 0 ]] && die "no terminal to ask questions; run with -y to use defaults"
+
+if [[ -e /etc/wireguard/wg0.conf ]]; then
+  yes_no "WireGuard is already set up (/etc/wireguard/wg0.conf). Replace it and all client keys?" n ||
+    die "cancelled, nothing changed"
 fi
-echo 'Port 22222' >> /etc/ssh/sshd_config
-systemctl restart sshd
-mkdir -p "${working_dir}"
-mkdir -p "/etc/wireguard"
 
-echo ---------------------------------------------------------update and upgrade
-apt update -y && apt upgrade -y
+detected_ip=$(curl -4 -s --max-time 3 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
+current_ssh_port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')
+current_ssh_port=${current_ssh_port:-22}
 
-echo ------------------------------------------------------install linux headers
-apt install -y linux-headers-"$(uname -r)"
-
-echo ----------------------------------------------------------install net-tools
-apt install net-tools -y
-
-echo ------------------------------------------install software-properties-common
-apt install -y software-properties-common
-
-echo ---------------------------------------------------------install wireguard
-apt install -y wireguard
-modprobe wireguard
-
-echo ----------------------------------------------------------install qrencode
-apt install -y qrencode
-
-echo -------------------------------------------------- download wg-genconfig.sh
-cd "${working_dir}" &&
-wget https://raw.githubusercontent.com/davidan1123/wg/main/wg-genconf.sh
-chmod +x ./wg-genconf.sh
-
-echo ----------------------generate configurations for "${clients}" clients
-if [[ ${unbound_enabled} ]]; then
-   # use the wireguard server as a DNS resolver
-  ./wg-genconf.sh "${clients}"
+# ---------------------------------------------------------------- questions
+echo "WireGuard server setup. Press Enter to accept the [default]."
+echo
+ask clients  "How many client configs"         5
+ask endpoint "Server public IP or hostname"    "$detected_ip"
+ask wg_port  "WireGuard UDP port"              52220
+ask subnet   "VPN subnet (first 3 numbers)"    10.10.10
+if yes_no "Run a private DNS resolver (Unbound) on this server?" y; then
+  unbound=1; dns="${subnet}.1"
 else
-  # use the cloudflare as a DNS resolver
-  ./wg-genconf.sh "${clients}" "1.1.1.1"
+  unbound=;  ask dns "DNS server for clients" 1.1.1.1
 fi
+ask ssh_port "SSH port (change only if you want a new one)" "$current_ssh_port"
+yes_no "Reboot when finished?" n && reboot_after=1 || reboot_after=
 
+valid_port() { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 )); }
+[[ "$clients" =~ ^[0-9]+$ ]] && (( clients >= 1 && clients <= 253 )) || die "clients must be 1-253"
+valid_port "$wg_port"  || die "WireGuard port must be 1-65535"
+valid_port "$ssh_port" || die "SSH port must be 1-65535"
+[[ "$subnet" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || die "subnet must look like 10.10.10"
+[[ -n "$endpoint" ]] || die "server address is empty"
 
-echo -----------------------------------move server\'s config to /etc/wireguard/
-mv -v ./wg0.conf \
-      /etc/wireguard/
-chown -v root:root /etc/wireguard/wg0.conf
-chmod -v 600 /etc/wireguard/wg0.conf
+cat <<EOF
 
-echo ------------------------------------------------------------- run wireguard
-wg-quick up wg0
+  Clients        : $clients
+  Endpoint       : $endpoint:$wg_port (udp)
+  VPN subnet     : $subnet.0/24 (server $subnet.1)
+  Client DNS     : $dns $([[ $unbound ]] && echo "(Unbound on this server)")
+  SSH port       : $ssh_port $([[ $ssh_port != "$current_ssh_port" ]] && echo "(changing from $current_ssh_port)")
+  Reboot at end  : $([[ $reboot_after ]] && echo yes || echo no)
+  Configs saved  : $working_dir
+
+EOF
+yes_no "Continue?" y || die "cancelled, nothing changed"
+
+# ------------------------------------------------------------------ install
+export DEBIAN_FRONTEND=noninteractive
+
+step "Installing packages"
+apt-get update -y
+apt-get install -y wireguard qrencode curl ${unbound:+unbound}
+
+step "Generating configs"
+genconf="$script_dir/wg-genconf.sh"
+if [[ ! -f "$genconf" ]]; then
+  genconf="$working_dir/wg-genconf.sh"
+  mkdir -p "$working_dir"
+  curl -fsSL "$repo_raw/wg-genconf.sh" -o "$genconf"
+fi
+ASSUME_YES=1 WG_SKIP_QR=1 \
+WG_CLIENTS="$clients" WG_ENDPOINT="$endpoint" WG_PORT="$wg_port" \
+WG_SUBNET="$subnet" WG_DNS="$dns" WG_OUT_DIR="$working_dir" \
+  bash "$genconf"
+
+install -d -m 700 /etc/wireguard
+install -m 600 -o root -g root "$working_dir/wg0.conf" /etc/wireguard/wg0.conf
+rm -f "$working_dir/wg0.conf"
+
+step "Enabling IP forwarding"
+echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-wireguard.conf
+sysctl -p /etc/sysctl.d/99-wireguard.conf
+
+step "Starting WireGuard"
 systemctl enable wg-quick@wg0
+systemctl restart wg-quick@wg0
 
-echo ------------------------------------------------------enable IPv4 forwarding
-sysctl net.ipv4.ip_forward=1
-echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-sysctl.conf
-
-echo ---------------------------------------------------configure firewall rules
-
-
-iptables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
-iptables -A INPUT -p icmp -j ACCEPT
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A INPUT -p tcp --dport 22222 -j ACCEPT
-iptables -A INPUT -i wg0 -p udp -m udp --dport 52220 -j ACCEPT
-iptables -A INPUT -p tcp --dport 80 -m comment --comment "HTTP Port" -j ACCEPT
-iptables -A INPUT -j LOG --log-prefix "iptables input dropped: "
-iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-iptables -A FORWARD -m conntrack --ctstate INVALID -j DROP
-iptables -A FORWARD -p icmp -j ACCEPT
-iptables -A FORWARD -i lo -j ACCEPT
-iptables -A FORWARD -j LOG --log-prefix "iptables forward dropped: "
-iptables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-iptables -A OUTPUT -m conntrack --ctstate INVALID -j DROP
-iptables -A OUTPUT -p icmp -j ACCEPT
-iptables -A OUTPUT -o lo -j ACCEPT
-iptables -A OUTPUT -s 106.10.10.0/24 -j ACCEPT
-iptables -A OUTPUT -o eth0 -p tcp -m multiport --dports 53,80,443 -m conntrack --ctstate NEW -j ACCEPT
-iptables -A OUTPUT -o eth0 -p udp -m multiport --dports 53,123 -j ACCEPT
-iptables -A OUTPUT -j LOG --log-prefix "iptables output dropped: "
-iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-iptables -t nat -A POSTROUTING -s 106.10.10.0/24 -o eth0 -j MASQUERADE
-
-
-# make firewall changes persistent
-echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
-echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
-
-apt install -y iptables-persistent
-
-systemctl enable netfilter-persistent
-netfilter-persistent save
-
-if [[ ${unbound_enabled} ]]; then
-  echo ---------------------------------------------install and configure unbound
-  apt install -y unbound unbound-host
-
-  mkdir -p /var/lib/unbound
-  curl -o /var/lib/unbound/root.hints https://www.internic.net/domain/named.cache
-  echo 'curl -o /var/lib/unbound/root.hints https://www.internic.net/domain/named.cache' > /etc/cron.monthly/curl_root_hints.sh
-  chmod +x /etc/cron.monthly/curl_root_hints.sh
-
-
-  cat > /etc/unbound/unbound.conf << ENDOFFILE
+if [[ $unbound ]]; then
+  step "Configuring Unbound DNS"
+  cat > /etc/unbound/unbound.conf.d/wireguard.conf <<EOF
 server:
-    num-threads: 4
-    # disable logs
-    verbosity: 0
-    # list of root DNS servers
-    root-hints: "/var/lib/unbound/root.hints"
-    # use the root server's key for DNSSEC
-    auto-trust-anchor-file: "/var/lib/unbound/root.key"
-    # respond to DNS requests on all interfaces
-    interface: 0.0.0.0
-    max-udp-size: 3072
-    # IPs authorised to access the DNS Server
-    access-control: 0.0.0.0/0                 refuse
-    access-control: 127.0.0.1                 allow
-    access-control: 106.10.10.0/24             allow
-    # not allowed to be returned for public Internet  names
-    private-address: 106.10.10.0/24
-    #hide DNS Server info
+    interface: 127.0.0.1
+    interface: ${subnet}.1
+    ip-freebind: yes
+    access-control: 127.0.0.0/8 allow
+    access-control: ${subnet}.0/24 allow
+    private-address: ${subnet}.0/24
     hide-identity: yes
     hide-version: yes
-    # limit DNS fraud and use DNSSEC
     harden-glue: yes
     harden-dnssec-stripped: yes
-    harden-referral-path: yes
-    # add an unwanted reply threshold to clean the cache and avoid, when possible, DNS poisoning
-    unwanted-reply-threshold: 10000000
-    # have the validator print validation failures to the log
-    val-log-level: 1
-    # minimum lifetime of cache entries in seconds
-    cache-min-ttl: 1800
-    # maximum lifetime of cached entries in seconds
-    cache-max-ttl: 14400
-    prefetch: yes
-    prefetch-key: yes
-    # don't use Capitalization randomization as it known to cause DNSSEC issues sometimes
-    # see https://discourse.pi-hole.net/t/unbound-stubby-or-dnscrypt-proxy/9378 for further details
     use-caps-for-id: no
-    # reduce EDNS reassembly buffer size.
-    # suggested by the unbound man page to reduce fragmentation reassembly problems
-    edns-buffer-size: 1472
-    # ensure kernel buffer is large enough to not lose messages in traffic spikes
-    so-rcvbuf: 1m
-    # ensure privacy of local IP ranges
-    private-address: 106.10.10.0/24
-ENDOFFILE
-
-  # give root ownership of the Unbound config
-  chown -R unbound:unbound /var/lib/unbound
-
-  # disable systemd-resolved
-  systemctl stop systemd-resolved
-  systemctl disable systemd-resolved
-
-  # enable Unbound in place of systemd-resovled
+    prefetch: yes
+    verbosity: 0
+EOF
+  unbound-checkconf
   systemctl enable unbound
-  systemctl start unbound
+  systemctl restart unbound
 fi
 
-# show wg
+if [[ "$ssh_port" != "$current_ssh_port" ]]; then
+  step "Changing SSH port to $ssh_port"
+  echo "Port $ssh_port" > /etc/ssh/sshd_config.d/99-port.conf
+  if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then ufw allow "$ssh_port/tcp"; fi
+  sshd -t
+  systemctl daemon-reload
+  # Ubuntu 22.10+ uses socket activation; older releases use ssh.service
+  if systemctl is-active --quiet ssh.socket; then systemctl restart ssh.socket; else systemctl restart ssh; fi
+  echo "Keep this session open and test: ssh -p $ssh_port <user>@$endpoint"
+fi
+
+if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
+  step "Opening firewall (ufw)"
+  ufw allow "$wg_port/udp"
+  [[ $unbound ]] && ufw allow in on wg0 to any port 53
+  ufw route allow in on wg0
+fi
+
+# --------------------------------------------------------------------- done
+step "Done"
 wg show
-
-set +x # disable print all commands
-
-echo && echo You can use this config: client2.conf
-echo "--------------------------------------------------------↓"
-qrencode -t ansiutf8 < ~/wireguard/client2.conf
-echo "--------------------------------------------------------↑"
-echo && echo You can use this config: client2.conf
-echo "--------------------------------------------------------↓"
-cat "${working_dir}/client2.conf"
-echo "--------------------------------------------------------↑"
-
-echo && echo "Or you could find all the generated configs here: ${working_dir}"
 echo
+echo "Client configs are in $working_dir:"
+ls -1 "$working_dir"/client*.conf | sed 's/^/  /'
+echo "Copy one to each device, or scan its QR code in the WireGuard phone app."
 
-# if WG_SCRIPT_DISABLE_REBOOT is not set, then
-# reboot to make changes effective
-if [[ ${reboot_enabled} ]]; then
-  echo All done, reboot...
+if [[ -z "$ASSUME_YES" ]]; then
+  while true; do
+    echo
+    read -rp "Show QR code for client number (Enter to finish): " n
+    [[ -z "$n" ]] && break
+    if [[ -f "$working_dir/client$n.conf" ]]; then
+      qrencode -t ansiutf8 < "$working_dir/client$n.conf"
+    else
+      echo "No client$n.conf"
+    fi
+  done
+fi
+
+if [[ $reboot_after ]]; then
+  echo "Rebooting..."
   reboot
 fi
-
-exit 0
